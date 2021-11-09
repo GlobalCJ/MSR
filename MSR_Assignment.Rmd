@@ -1,0 +1,256 @@
+---
+title: "MSR Final Assignment"
+author: "Audrya Kerenhappukh"
+date: "11/8/2021"
+output:
+  html_notebook:
+    code_folding: "none"
+    toc: yes
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+      
+  html_document:
+    theme: united
+    highlight: tango
+    toc: yes
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    df_print: paged
+---
+
+
+## Data Preparation 
+Import data set
+
+```{r}
+library(readxl)
+RawDF <- read_excel("StudentsGrade.xlsx")
+
+```
+
+Unpivot the table and create 2 new columns (Courses and Grade)
+```{r}
+library(tidyr)
+
+CleanDF <- RawDF %>% gather(key=Courses, value=Grade, -Students)
+
+head(CleanDF)
+```
+
+## Data Understanding 
+### Table with Trend Graphics
+
+```{r}
+library(dplyr)
+library(sparkline)
+```
+
+```{r}
+course_histogram_data <- CleanDF %>%
+  group_by(Courses) %>%
+  summarise(
+    Histogram = spk_chr(
+      Grade, type ="bar",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+course_sparkline_data <- CleanDF %>%
+  group_by(Courses) %>%
+  summarise(
+    Sparkline = spk_chr(
+      Grade, type ="line",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+
+```
+
+```{r}
+trend.rows <- left_join(course_histogram_data, course_sparkline_data) %>% t() %>% as.data.frame()
+
+colnames(trend.rows) <- trend.rows[1,]
+trend.rows = trend.rows[-1, ]
+
+trend.rows <- tibble::rownames_to_column(trend.rows, "Students")
+```
+
+```{r}
+CompleteDF <- rbind(RawDF,trend.rows)
+```
+
+```{r}           
+
+grades_histogram_data <- CleanDF %>%
+  group_by(Students) %>%
+  summarize(
+    Histogram = spk_chr(
+      Grade, type ="bar",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+CompleteDF <- left_join(CompleteDF, grades_histogram_data, by = "Students")
+
+grades_sparkline_data <- CleanDF %>%
+  group_by(Students) %>%
+  summarize(
+    Sparkline = spk_chr(
+      Grade, type ="line",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+
+CompleteDF <- left_join(CompleteDF, grades_sparkline_data)
+
+```
+
+
+
+```{r}
+library(DT)
+
+datatable(CompleteDF, rownames = FALSE, escape = FALSE, options = list(paging = FALSE, fnDrawCallback = htmlwidgets::JS(
+  '
+function(){
+  HTMLWidgets.staticRender();
+}
+'
+)
+)) %>%
+  spk_add_deps()  
+
+```
+
+### Histogram 
+#### Histogram 1 (Absolute Number)
+Create a Frequency and Cumulative Table
+```{r}
+grade.count <- as.data.frame(table(CleanDF$Grade)) 
+names(grade.count)[names(grade.count) == "Var1"] <- "Grade"
+
+
+freq.table <- transform(grade.count, Cumulative = cumsum(Freq))
+
+freq.table
+```
+
+```{r warning=FALSE}
+
+library(ggplot2)
+
+ratio <- max(freq.table$Freq) / max(freq.table$Cumulative) 
+
+ ggplot(freq.table, aes(x = Grade)) + 
+  geom_bar(aes(y=Freq, fill="Freq"), size = 1, stat="identity") + # Create a bargraph
+   geom_line(aes(y = Cumulative*ratio, colour = "Cumulative"), group=1, size=1) + # Create a line graph for Cumulative Count
+   labs(title = "Overall Distribution of Grades", x = "Grades", y = "Frequency" ) + # Create labels 
+   scale_y_continuous(breaks=seq(0,max(freq.table$Freq),by = 2),
+                      sec.axis=sec_axis(~./ratio,name="Cumulative", breaks=seq(0,max(freq.table$Cumulative), by = 10))) +
+   scale_colour_manual("Cumulative", values=c("Cumulative" = "tan1"))+
+   scale_fill_manual("Frequency",values="grey")+
+   theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+ 
+```
+
+#### Histogram 2 (Relative Number)
+
+```{r}
+
+prop.table <- as.data.frame(cbind(Grade = freq.table$Grade,
+                                  Freq=prop.table(freq.table$Freq),
+                                  Cumulative = cumsum(prop.table(freq.table$Freq))))
+prop.table$Grade <- factor(prop.table$Grade, levels = c(1:10))
+
+prop.table
+```
+```{r}
+
+ratio <- max(prop.table$Freq) / max(prop.table$Cumulative) 
+
+
+ ggplot(prop.table, aes(x = Grade)) + 
+ #Create a bargraph
+  geom_bar(aes(y=Freq, fill="Freq"), size = 1, stat="identity") + 
+   #Create a line graph for cumulative 
+   geom_line(aes(y = Cumulative*ratio, colour = "Cumulative"), group=1, size=1) + 
+    #Add labels 
+   labs(title = "Overall Distribution of Grades", x = "Grades", y = "Frequency" ) + 
+    #Adjust grid major lines and secondary axis 
+   scale_y_continuous(breaks=seq(0,max(prop.table$Freq),by = 0.02), 
+                                 labels = scales::percent,
+                                 sec.axis=sec_axis(~./ratio,name="Cumulative",
+                                          breaks=seq(0,max(prop.table$Cumulative), by = 0.1), labels = scales::percent)) +
+    # Add Legend and adjust legend and title positions
+   scale_colour_manual("Cumulative", values=c("Cumulative" = "tan1"))+
+   scale_fill_manual("Frequency",values="grey")+
+   theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+```
+
+
+
+### Graphics by Students
+First Create a tables with mean and std 
+
+```{r}
+
+library(e1071)
+sd.p <- function(x){sd(x)*sqrt((length(x)-1)/length(x))}
+   
+stat.table <- cbind(Students = RawDF$Students, 
+                    Sum = rowSums(RawDF[,-1]),
+                    Mean = round(rowMeans(RawDF[,-1]),2),
+                    Stdev = round(apply(RawDF[,-1],1,sd.p),2),
+                    Skewness = round(apply(RawDF[,-1],1,skewness,na.rm= TRUE),2),
+                    Kurtosis = round(apply(RawDF[,-1],1,kurtosis,na.rm= TRUE),2)) %>% as.data.frame
+
+stat.table <- as.data.frame(cbind(Students = stat.table$Students, as.data.frame( lapply(stat.table[,-1], as.numeric))))
+
+stat.table <- transform(stat.table, MeanOfMeans = mean(stat.table$Mean), MeanStd = mean(stat.table$Stdev), MeanSkew = mean(stat.table$Skewness), MeanKurtosis = mean(stat.table$Kurtosis))
+```
+
+
+```{r}
+
+y.grid <- seq(min(RawDF[,-1]), max(RawDF[,-1]), by = 1)
+
+ggplot(stat.table,aes(x = Students)) + 
+   geom_line(aes(y = Mean, colour = "Mean"), size = 1 , group = 1) + 
+   geom_point(aes(y = Mean,  colour = "Mean")) +
+   geom_line(aes (y = MeanOfMeans , colour = "Mean of Means"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(min(RawDF[,-1]), max(RawDF[,-1])),  breaks = y.grid )+ 
+   labs(title = "Means Grade by Student", x ="Students", y="") + 
+    scale_colour_manual(values=c("Mean" = "blue", "Mean of Means" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+```
+```{r}
+ggplot(stat.table,aes(x = Students)) + 
+   geom_line(aes(y = Stdev, colour = "Standard Deviation"), size = 1 , group = 1) + 
+   geom_point(aes(y = Stdev,  colour = "Standard Deviation")) +
+   geom_line(aes (y = MeanStd , colour = "Mean of Std"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(0,3.5),  breaks = seq(0,3.5,by =0.5))+ 
+   labs(title = "Standard Deviation of Grades by Student", x ="Students", y="") + 
+   scale_colour_manual(values=c("Standard Deviation" = "blue", "Mean of Std" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+```
+
