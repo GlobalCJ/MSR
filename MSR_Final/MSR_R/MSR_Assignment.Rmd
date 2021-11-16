@@ -1,0 +1,477 @@
+---
+title: "MSR Final Assignment"
+author: "Audrya Kerenhappukh | Cihan Acilov | Anuruddha Punam Kristhombuge"
+date: "11/8/2021"
+output:
+  html_notebook:
+    code_folding: "none"
+    toc: yes
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+      
+  html_document:
+    theme: united
+    highlight: tango
+    toc: yes
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    df_print: paged
+---
+
+```{r Setup, include=FALSE}
+library(readxl)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(sparkline)
+library(DT)
+library(ggplot2)
+library(e1071)
+library(ggpubr)
+```
+
+## Data Preparation 
+Import data set and select only limited range 
+```{r}
+RawDF <- read_excel("HAN_Stat & Math Foundation-Assignment _rel 02.xlsx", 
+                    range = "B11:H22")
+print(RawDF)
+
+```
+```{r}
+
+
+CleanDF <- RawDF %>% gather(key=Courses, value=Grade, -Students)
+
+#Example of dataset for a student
+CleanDF %>% filter(Students=='a') %>% print()
+
+```
+
+## Data Understanding 
+### Table with Trend Graphics
+Use Sparkline package to create a sparkline HTML table as following 
+```{r}
+#Create HTML table for Histogram
+course_histogram_data <- CleanDF %>%
+  group_by(Courses) %>%
+  summarise(
+    Histogram = spk_chr(
+      Grade, type ="bar",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+#Create HTML table for Sparkline
+course_sparkline_data <- CleanDF %>%
+  group_by(Courses) %>%
+  summarise(
+    Sparkline = spk_chr(
+      Grade, type ="line",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+#Example of data frame:
+head(course_histogram_data,2)
+```
+Merge the sparkline/histogram table with the current dataset. 
+```{r}
+
+#As dataset above are showing courses number as one column, we need to transpose the table so it becomes column names 
+trend.rows <- left_join(course_histogram_data, course_sparkline_data) %>% t() %>% as.data.frame()
+
+#Promote the first row as headline
+colnames(trend.rows) <- trend.rows[1,]
+trend.rows = trend.rows[-1, ]
+
+
+trend.rows <- tibble::rownames_to_column(trend.rows, "Students")
+
+head(trend.rows, 2)
+```
+
+Append the trend.rows with the original dataset. It is important to ensure that the column names of both data frame are the same. 
+```{r}
+CompleteDF <- rbind(RawDF,trend.rows)
+```
+
+Create grade trend for each students (each row)
+```{r}           
+
+#Create HTML table for Histogram
+grades_histogram_data <- CleanDF %>%
+  group_by(Students) %>%
+  summarize(
+    Histogram = spk_chr(
+      Grade, type ="bar",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+# Merge the histogram with the complete data frame 
+CompleteDF <- left_join(CompleteDF, grades_histogram_data, by = "Students")
+
+#Create HTML table for Sparklines 
+grades_sparkline_data <- CleanDF %>%
+  group_by(Students) %>%
+  summarize(
+    Sparkline = spk_chr(
+      Grade, type ="line",
+      chartRangeMin = 100, chartRangeMax = max(Grade)
+    )
+  )
+
+# Merge the histogram with the complete data frame 
+CompleteDF <- left_join(CompleteDF, grades_sparkline_data)
+```
+
+Using DT library to create a HTML table with visuals:
+```{r}
+complete.table <- datatable(CompleteDF,  rownames = FALSE, escape = FALSE, options = list(dom = 't', paging = FALSE, ordering =  FALSE, fnDrawCallback = htmlwidgets::JS(
+  '
+function(){
+  HTMLWidgets.staticRender();
+}
+'
+)
+)) %>%
+  spk_add_deps()  
+
+complete.table
+
+```
+
+### Histogram 
+#### Histogram 1 (Absolute Number)
+
+Create a Frequency and Cumulative Table based on the unpivoted column.
+```{r}
+grade.count <- as.data.frame(table(CleanDF$Grade)) 
+names(grade.count)[names(grade.count) == "Var1"] <- "Grade"
+
+
+freq.table <- transform(grade.count, Cumulative = cumsum(Freq))
+
+freq.table
+```
+
+```{r warning=FALSE}
+
+ratio <- max(freq.table$Freq) / max(freq.table$Cumulative) #Create a ratio variable for the Y axis limit 
+
+freq.graph <- ggplot(freq.table, aes(x = Grade)) + 
+    # Create a bargraph for the absolute frequency
+  geom_bar(aes(y=Freq, fill="Frequency"), size = 1, stat="identity") + 
+     # Create a line graph for Cumulative Count
+   geom_line(aes(y = Cumulative*ratio, colour = "Cumulative"), group=1, size=1) +
+    # Create labels 
+   labs(title = "Overall Distribution of Grades", x = "Grades", y = "Frequency" ) + 
+    # Scale the secondary values 
+   scale_y_continuous(breaks=seq(0,max(freq.table$Freq),by = 2),
+                      sec.axis=sec_axis(~./ratio,name="Cumulative", breaks=seq(0,max(freq.table$Cumulative), by = 10))) +
+    #Set color and legend setings 
+   scale_colour_manual("Cumulative", values=c("Cumulative" = "tan1"))+
+   scale_fill_manual("Frequency",values="grey")+
+    #Set plot design 
+   theme(plot.title = element_text(hjust = 0.5), #Title in the center
+         #Legend layout:
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+
+freq.graph
+ 
+```
+
+Frequency show that how many times appearing on the grades and culminative frequency distribution in the sum of the class.  Grade 4 students performance very high and grage 10 below the average. 
+
+
+#### Histogram 2 (Relative Number)
+Create a proportion table for the relative values based on the freq.table
+```{r}
+prop.table <- as.data.frame(cbind(Grade = freq.table$Grade,
+                                  Freq=prop.table(freq.table$Freq),
+                                  Cumulative = cumsum(prop.table(freq.table$Freq))))
+prop.table$Grade <- factor(prop.table$Grade, levels = c(1:10))
+
+prop.table
+```
+
+```{r}
+
+ratio <- max(prop.table$Freq) / max(prop.table$Cumulative) 
+
+
+ relative.graph <- ggplot(prop.table, aes(x = Grade)) + 
+ #Create a bargraph
+  geom_bar(aes(y=Freq, fill="Frequency"), size = 1, stat="identity") + 
+   #Create a line graph for cumulative 
+   geom_line(aes(y = Cumulative*ratio, colour = "Cumulative"), group=1, size=1) + 
+    #Add labels 
+   labs(title = "Overall Distribution of Grades", x = "Grades", y = "Frequency" ) + 
+    #Adjust grid major lines and secondary axis 
+   scale_y_continuous(breaks=seq(0,max(prop.table$Freq),by = 0.02), 
+                                 labels = scales::percent,
+                                 sec.axis=sec_axis(~./ratio,name="Cumulative",
+                                          breaks=seq(0,max(prop.table$Cumulative), by = 0.1), labels = scales::percent)) +
+    # Add Legend and adjust legend and title positions
+   scale_colour_manual("Cumulative", values=c("Cumulative" = "tan1"))+
+   scale_fill_manual("Frequency",values="grey")+
+   theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+ 
+ relative.graph
+```
+Frequency show that percentage of how many times appearing on the grades and culminative percentage of frequency distribution in the sum of the class.  Grade 4 students performance very high and grage 10 below the average.
+
+
+### Graphics by Students
+Create a table with all the calculations
+```{r}
+
+#Because current Stdev function in R is Stdev for Sample, we need to create a function 
+sd.p <- function(x){sd(x)*sqrt((length(x)-1)/length(x))}
+
+#Create a table for everyting
+stat.table <- cbind(Students = RawDF$Students, 
+                    Sum = rowSums(RawDF[,-1]),
+                    Mean = round(rowMeans(RawDF[,-1]),2),
+                    Stdev = round(apply(RawDF[,-1],1,sd.p),2),
+                    Skewness = round(apply(RawDF[,-1],1,skewness,na.rm= TRUE),2),
+                    Kurtosis = round(apply(RawDF[,-1],1,kurtosis,na.rm= TRUE),2)) %>% as.data.frame
+
+#Because the results of function above showing numeric values, we need to transform them to numeric values
+stat.table <- as.data.frame(cbind(Students = stat.table$Students, as.data.frame( lapply(stat.table[,-1], as.numeric))))
+
+#Add the table for Mean of Means 
+stat.table <- transform(stat.table, MeanOfMeans = mean(stat.table$Mean), MeanStd = mean(stat.table$Stdev), MeanSkew = mean(stat.table$Skewness), MeanKurtosis = mean(stat.table$Kurtosis))
+
+head(stat.table)
+```
+
+##### Means Grade by Student
+```{r}
+
+#A variable for Y axes limit 
+y.grid <- seq(min(RawDF[,-1]), max(RawDF[,-1]), by = 1)
+
+student.mean <- ggplot(stat.table,aes(x = Students)) + 
+   geom_line(aes(y = Mean, colour = "Mean"), size = 1 , group = 1) + 
+   geom_point(aes(y = Mean,  colour = "Mean")) +
+   geom_line(aes (y = MeanOfMeans , colour = "Mean of Means"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(min(RawDF[,-1]), max(RawDF[,-1])),  breaks = y.grid )+ 
+   labs(title = "Means Grade by Student", x ="Students", y="") + 
+    scale_colour_manual(values=c("Mean" = "blue", "Mean of Means" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+
+student.mean
+
+```
+##### Standard Deviation of Grades by Student
+```{r}
+student.stdev <- ggplot(stat.table,aes(x = Students)) + 
+   geom_line(aes(y = Stdev, colour = "Standard Deviation"), size = 1 , group = 1) + 
+   geom_point(aes(y = Stdev,  colour = "Standard Deviation")) +
+   geom_line(aes (y = MeanStd , colour = "Mean of Std"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(0,3.5),  breaks = seq(0,3.5,by =0.5))+ 
+   labs(title = "Standard Deviation of Grades by Student", x ="Students", y="") + 
+   scale_colour_manual(values=c("Standard Deviation" = "blue", "Mean of Std" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+student.stdev
+```
+##### Skewness of Grades by Student
+```{r}
+student.skewness <- ggplot(stat.table,aes(x = Students)) + 
+   geom_line(aes(y = Skewness, colour = "Skewness"), size = 1 , group = 1) + 
+   geom_point(aes(y = Skewness,  colour = "Skewness")) +
+   geom_line(aes (y = MeanSkew , colour = "Mean of Skewness"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(min(stat.table$Skewness) - 0.5, max (stat.table$Skewness) + 0.5),  breaks = seq(min(stat.table$Skewness) - 0.5, max (stat.table$Skewness) + 0.5,by =0.2))+ 
+   labs(title = "Skewness of Grades by Student", x ="Students", y="") + 
+   scale_colour_manual(values=c("Skewness" = "blue", "Mean of Skewness" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+student.skewness
+```
+##### Kurtosis of Grades by Student
+```{r}
+student.kurtosis <- ggplot(stat.table,aes(x = Students)) + 
+   geom_line(aes(y = Kurtosis, colour = "Kurtosis"), size = 1 , group = 1) + 
+   geom_point(aes(y = Kurtosis,  colour = "Kurtosis")) +
+   geom_line(aes (y = MeanKurtosis , colour = "Mean of Kurtosis"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(min(stat.table$Kurtosis)-0.5, max(stat.table$Kurtosis)+0.5),  breaks = seq( min(stat.table$Kurtosis)-0.5, max(stat.table$Kurtosis)+0.5, by =0.5))+ 
+   labs(title = "Kurtosis of Grades by Student", x ="Students", y="") + 
+   scale_colour_manual(values=c("Kurtosis" = "blue", "Mean of Kurtosis" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+student.kurtosis
+```
+
+### Graphics by Course
+Create a transpose table for seeing the Course average
+```{r}
+courseDF <- RawDF %>% t() %>% as.data.frame()
+
+#Change the first row as column names 
+colnames(courseDF) <- courseDF[1,]
+courseDF <- courseDF[-1, ]
+
+#Change row names as a new column for Course
+courseDF <- tibble::rownames_to_column(courseDF, "Course")
+
+#Change all course columns to Numeric
+courseDF <- cbind("Course"= courseDF[,1], as.data.frame(lapply(courseDF[,-1], as.numeric)))
+```
+
+
+```{r}
+sd.p <- function(x){sd(x)*sqrt((length(x)-1)/length(x))}
+   
+course.table <- cbind(Course = courseDF$Course, 
+                    Sum = rowSums(courseDF[,-1]),
+                    Mean = round(rowMeans(courseDF[,-1]),2),
+                    Stdev = round(apply(courseDF[,-1],1,sd.p),2),
+                    Skewness = round(apply(courseDF[,-1],1,skewness,na.rm= TRUE),2),
+                    Kurtosis = round(apply(courseDF[,-1],1,kurtosis,na.rm= TRUE),2)) %>% as.data.frame
+
+course.table <- as.data.frame(cbind(Course = course.table$Course, as.data.frame( lapply(course.table[,-1], as.numeric))))
+
+# Add Mean of Means Table 
+course.table <- transform(course.table, MeanOfMeans = mean(course.table$Mean), MeanStd = mean(course.table$Stdev), MeanSkew = mean(course.table$Skewness), MeanKurtosis = mean(course.table$Kurtosis))
+```
+
+
+##### Means Grade by Course
+```{r echo=TRUE}
+
+y.grid <- seq(min(courseDF[,-1]), max(courseDF[,-1]), by = 1)
+
+course.mean <- ggplot(course.table,aes(x = Course)) + 
+   geom_line(aes(y = Mean, colour = "Mean"), size = 1 , group = 1) + 
+   geom_point(aes(y = Mean,  colour = "Mean")) +
+   geom_line(aes (y = MeanOfMeans , colour = "Mean of Means"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(min(courseDF[,-1]), max(courseDF[,-1])),  breaks = y.grid )+ 
+   labs(title = "Means Grade by Course", x ="Course", y="") + 
+    scale_colour_manual(values=c("Mean" = "blue", "Mean of Means" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+course.mean
+```
+
+##### Standard Deviation of Grades by Course
+```{r echo=TRUE}
+course.stdev <- ggplot(course.table,aes(x = Course)) + 
+   geom_line(aes(y = Stdev, colour = "Standard Deviation"), size = 1 , group = 1) + 
+   geom_point(aes(y = Stdev,  colour = "Standard Deviation")) +
+   geom_line(aes (y = MeanStd , colour = "Mean of Std"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(0,3.5),  breaks = seq(0,3.5,by =0.5))+ 
+   labs(title = "Standard Deviation of Grades by Course", x ="Course", y="") + 
+   scale_colour_manual(values=c("Standard Deviation" = "blue", "Mean of Std" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+course.stdev
+```
+
+##### Skewness of Grades by Course
+```{r echo=TRUE}
+course.skewness <- ggplot(course.table,aes(x = Course)) + 
+   geom_line(aes(y = Skewness, colour = "Skewness"), size = 1 , group = 1) + 
+   geom_point(aes(y = Skewness,  colour = "Skewness")) +
+   geom_line(aes (y = MeanSkew , colour = "Mean of Skewness"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(min(course.table$Skewness) - 0.5, max (stat.table$Skewness) + 0.5),  breaks = seq(min(course.table$Skewness) - 0.5, max (course.table$Skewness) + 0.5,by =0.2))+ 
+   labs(title = "Skewness of Grades by Course", x ="Courses", y="") + 
+   scale_colour_manual(values=c("Skewness" = "blue", "Mean of Skewness" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+course.skewness
+```
+
+##### Kurtosis of Grades by Course
+```{r echo=TRUE}
+course.kurtosis <- ggplot(course.table,aes(x = Course)) + 
+   geom_line(aes(y = Kurtosis, colour = "Kurtosis"), size = 1 , group = 1) + 
+   geom_point(aes(y = Kurtosis,  colour = "Kurtosis")) +
+   geom_line(aes (y = MeanKurtosis , colour = "Mean of Kurtosis"), group = 1, size = 1, linetype = "dashed") +
+   scale_y_continuous(limits = c(min(stat.table$Kurtosis)-0.5, max(stat.table$Kurtosis)+0.5),  breaks = seq(min(stat.table$Kurtosis)-0.5, max(stat.table$Kurtosis)+0.5, by =0.5))+ 
+   labs(title = "Kurtosis of Grades by Course", x ="Courses", y="") + 
+   scale_colour_manual(values=c("Kurtosis" = "blue", "Mean of Kurtosis" = "red")) +
+    theme(plot.title = element_text(hjust = 0.5),
+         legend.key=element_blank(),
+         legend.title=element_blank(),
+         legend.box="horizontal", 
+         legend.position = "top")
+course.kurtosis
+```
+## Summary
+```{r warning=FALSE}
+#Print HTML table
+complete.table
+```
+
+```{r}
+#Print Dstribution Graphs
+ggarrange(freq.graph, relative.graph, nrow=1, ncol=2)
+```
+The graph is showing the distribution of grades in numbers. The line value is showing the cumulative count of grades, which is equel to 66 (11 students, 6 course = 66 grades)
+
+The graph is showing the distribution of grades in percentile. The line value is showing the cumulative count of grades in percentile. 
+
+
+```{r warning=FALSE}
+#Summary of all Students Graphs
+ggarrange(student.mean, student.stdev, student.skewness,student.kurtosis)
+```
+Means grade by student
+Blue line shows the mean of student grades. Red line shows the mean of mean. Student C perform the highest and the student D & J performed the lowest. 
+Standard deviation of grades by student
+Blue line shows the standard deviation of student grades.Red line shows the mean of students. Student C & K has lowest standard deviations and the student A has the highest.
+Skewness of Grades by student
+Blue line shows the skewness of student grades. Red line shows the mean of skewness. Mean of skewness is below 0. 
+Kurtosis of grades by student
+Blue line shows the kurtosis of student grades. Red line shows the mean of kurtosis. Mean of kurtosis is below 0.  
+
+
+
+
+
+```{r}
+#Summary of all Courses Graphs
+ggarrange(course.mean, course.stdev, course.skewness,course.kurtosis)
+```
+Means grade by course
+Blue line shows the mean grade of courses. Red line shows the mean of mean. course 6 perform the highest and the course 4 performed the lowest. 
+Standard deviation of grades by course
+Blue line shows the standard deviation of courses. Red line shows the mean of student. course 6 has the lowest standard deviation and the course 1 has the highest. 
+Skewness of Grades by course
+Blue line shows the skewness of courses. Red line shows the mean of skewness. course 4 has the highest skewness and the course 5 has the lowest. 
+Kurtosis of grades by course
+Blue line shows the kurtosis of courses. Red line shows the mean of kurtosis. course 4 has the highest kurtosis and the course 3 has the lowest. 
